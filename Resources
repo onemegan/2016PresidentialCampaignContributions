@@ -1,0 +1,32 @@
+DATA SOURCES
+Megan O'Neil
+
+2016 Campaign contirbution data: http://fec.gov/disclosurep/PDownload.do
+
+State population data from census: https://factfinder.census.gov/faces/tableservices/jsf/pages/productview.xhtml?pid=PEP_2015_PEPANNRES&src=pt
+
+Dataset with states and abbreviations:
+# http://www.fonz.net/blog/archives/2008/04/06/csv-of-states-and-state-abbreviations/
+
+References:
+CNN - date Sanders dropped out of race: http://www.cnn.com/2016/07/11/politics/hillary-clinton-bernie-sanders/
+
+Density plot, scale date: http://docs.ggplot2.org/0.9.3.1/scale_date.html
+
+Density plot, contribution date: https://discussions.udacity.com/t/financial-contributions-data-gender-political-party-and-location/194785/14
+
+Manually defined palettes: http://www.cookbook-r.com/Graphs/Colors_(ggplot2)/
+
+Adding a vertial line with labels:
+http://stackoverflow.com/questions/15000257/adding-a-vline-in-ggplot2-using-time;
+http://docs.ggplot2.org/current/geom_abline.html;
+http://sape.inf.usi.ch/quick-reference/ggplot2/geom_vline
+
+Heatmap:http://stackoverflow.com/questions/24441775/how-do-you-create-a-us-states-heatmap-based-on-some-values
+
+ggplot labels reference: http://docs.ggplot2.org/0.9.2.1/labs.html
+Removing axes reference: http://stackoverflow.com/questions/6528180/ggplot2-plot-without-axes-legends-etc
+
+Adding a horizontal line reference: http://docs.ggplot2.org/0.9.3.1/geom_hline.html
+
+Create boxplot with sample size: http://stackoverflow.com/questions/3483203/create-a-boxplot-in-r-that-labels-a-box-with-the-sample-size-n
