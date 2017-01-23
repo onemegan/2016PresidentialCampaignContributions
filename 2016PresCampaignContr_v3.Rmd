@@ -1,0 +1,917 @@
+2016 Presidential Campaign Finance by Megan O'Neil
+========================================================
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+
+# Recommendation from review: https://review.udacity.com/#!/reviews/319949
+# knitr chunk options: https://yihui.name/knitr/options/
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, packages}
+
+# Load all of the packages that you end up using
+# in your analysis in this code chunk.
+
+# Notice that the parameter "echo" was set to FALSE for this code chunk.
+# This prevents the code from displaying in the knitted HTML output.
+# You should set echo=FALSE for all code chunks in your file.
+
+rm(list = ls())
+
+library(ggplot2)
+library(GGally)
+library(scales)
+library(memisc) 
+library(plyr)
+library(dplyr)
+library(gridExtra)
+library(maps)
+library(lubridate)
+library(gsubfn)
+library(RColorBrewer)
+library(tidyr)
+```
+
+I am analyzing presidential campaign finance for the 2016 election. I am interested in looking at contributions from around the US.
+
+The 'us' datafile contains all campaign contributions in the US for the 2016 presidential election. It contains 7,344,719 observations/pieces of data. I'm going to run my analysis on a sample of 10,000 observations.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, Load_the_Data}
+# Load the Data, unzipped file manually.
+# Data source: http://fec.gov/disclosurep/PDownload.do
+
+setwd("C:/Dropbox/Pers/Courses/Nanodegree/P4/FinalProject")
+
+# File has trailing commas on data rows making the col names short by 1 column
+# So, read column names separately, add one more dummy column named "dummy"
+ln <- readLines(file('P00000001-ALL.csv'), n=1)
+ln <- paste(ln, 'dummy', sep = ',')
+col_names_raw <- unlist(strsplit(ln, ","))
+
+us <- read.csv("P00000001-ALL.csv", col.names=col_names_raw, 
+                         header=FALSE, row.names=NULL,  skip=1)
+
+us <- us[, !(colnames(us) == 'dummy')]
+str(us)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+set.seed(1000)
+us_samp <- us[sample(1:length(us$cand_id), 10000), ]
+str(us_samp)
+```
+
+# Univariate Plots Section
+## Contribution amount
+```{r echo=FALSE, Univariate_Plots}
+qplot(x = contb_receipt_amt, data = us_samp) + 
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+There are negative contributions, I am going to look at these, then remove them from a clean dataset.
+
+```{r}
+summary(us_samp$contb_receipt_amt)
+summary(subset(us_samp$contb_receipt_amt,us_samp$contb_receipt_amt < 0))
+nrow(subset(us_samp,us_samp$contb_receipt_amt < 0))
+
+# removing negative contributions:
+us_samp.clean <- subset(us_samp,us_samp$contb_receipt_amt > 0)
+summary(us_samp.clean$contb_receipt_amt)
+```
+
+There were 98 contributions with negative amounts. An inspection of those entries shows some were moved to a different fund, some were refunded. I am removing those observations with negative contribution amounts from the dataset. With 98 negative contributions from our sample of 10,000, they represent just 0.1% of the dataset.
+
+After removing those negatives, the median contribution amount is $28, mean of $120 and max of $5400. That max is interesting since the maximum allowed for an individual to make to a candidate is $2,700 (source: http://www.fec.gov/info/contriblimitschart1516.pdf). I'm going to look at these a bit more. 
+
+```{r}
+#View(head(us_samp.clean[with(us_samp.clean,order(-contb_receipt_amt)),], 20))
+```
+
+There are 3 contributions for $5400, one for $5k, one for $4k, and a number for $2700 in this sample. I am going to leave them, apparently these folks got a workaround for the limit...
+
+Now I'll look at the distribution of this 'cleaner' dataset, without the negative contributions but including the high ones.
+
+```{r}
+ggplot(aes(x = contb_receipt_amt), data = us_samp.clean) + 
+    geom_histogram(binwidth = 5) +
+    scale_x_continuous(limits = c(0,
+                                  quantile(us_samp.clean$contb_receipt_amt, 
+                                           .95)),
+                       breaks = seq(0,400,25))
+
+```
+
+The distribution of contribution amounts is positively skewed. Let's try a log-10  transformation of the contribution amount.
+
+```{r}
+
+ggplot(aes(x = contb_receipt_amt), data = us_samp.clean) + 
+    geom_histogram(binwidth = .25) +
+    scale_x_log10()
+```
+
+This transformation revealed a much more normal distribution.
+
+### Candidate
+Let's review by candidate.
+
+```{r}
+qplot(x = cand_nm, data = us_samp.clean) + 
+    coord_flip()
+#Reference: http://docs.ggplot2.org/current/coord_flip.html
+```
+
+
+Clinton had the largest number of donations, follwed by Sanders, Trump, then Cruz.
+
+Let's look at the primaries only. I'm going to proxy the primaries by including up to the date that Sanders officially dropped out of the race, whch was on July 11th, 2016 according to CNN. (CNN: http://www.cnn.com/2016/07/11/politics/hillary-clinton-bernie-sanders/)
+
+
+```{r}
+# Convert contb_receipt_dt to date format
+us_samp.clean <- mutate(us_samp.clean, 
+                        contb_receipt_dt = dmy(contb_receipt_dt))
+# dmy: http://stackoverflow.com/questions/21211285/converting-factor-to-date-in-r
+# mutate: http://stackoverflow.com/questions/33408636/convert-column-in-data-frame-to-date
+
+sanders_drop <- as.Date("2016-07-11")
+
+#Subset dataset to include contributions up to last Bernie contribution
+primaries <- us_samp.clean[which( 
+    us_samp.clean$contb_receipt_dt <= sanders_drop),]
+
+# Test: #max(primaries$contb_receipt_dt)
+
+# Plot for primaries
+ggplot(data = primaries, aes(x = cand_nm))+
+    geom_bar()+ 
+    coord_flip()
+    
+```
+
+In the primaries, Sanders is ahead of Clinton by a landslide.
+
+## Political party
+I want to add political party, which I think may have an effect on contribution size.
+
+```{r}
+# Create dataframe of candidate and political party
+cand_list <- sort(unique(us_samp.clean$cand_nm))
+parties <- c('Rep', 'Rep', 'Rep', 'Dem', 'Rep', 
+             'Rep', 'Rep', 'Rep', 'Lib', 'Rep', 
+             'Dem', 'Ind', 'Dem', 'Rep', 'Rep', 
+             'Dem', 'Green', 'Rep', 'Rep', 'Dem')
+
+cand_party <- data.frame(cand_list, parties)
+names(cand_party) <- c('cand_nm', 'party')
+#View(cand_party)          
+
+# Merge with broader dataframe
+us_samp.clean <- merge(us_samp.clean, cand_party, by = "cand_nm")
+#View(us_samp.clean)
+
+# Plot for number of contributions by political party
+qplot(x = party, data = us_samp.clean) + 
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+Here is the count of contributions by political party. The democrats received by far the most campaign contributions, more than double that of Republicans. (Actual counts here are not meaningful as this is a sample.) The numbers of contributions to the other party categories, Green, Libertarian, and Independent, are negligible in comparison.
+
+I will try a transformation of counts to see if we can view the other parties a little more clearly.
+
+```{r}
+# Plot for number of contributions by political party
+qplot(x = party, data = us_samp.clean) + 
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+    scale_y_log10()
+```
+
+With the log10 transformation of counts, we can see the other parties more clearly. Within the smaller parties, Libertarians had the highest count of contributions, followed by Green, followed by Independent. There was only one candidate in this sample for each of those parties: Jill Stein (Green), Evan McMullin (Independent), and  Gary Johnson (Libertarian). Note that Jim Webb's official party is Independent, but he ran in Democratic primaries so I've included him as a Democrat.
+
+## State
+I am interested in both the contributions by state and also contributions per capita by state. As such I'll want to add in state population at some point, so I'll do that now. I also noticed there are some weird state abbreviations in here, so I'll take a look and remove the weird ones.
+
+```{r}
+# State population data from census: https://factfinder.census.gov/faces/tableservices/jsf/pages/productview.xhtml?pid=PEP_2015_PEPANNRES&src=pt
+## Two header rows, skip one row
+pop <- read.csv("PEP_2015_PEPANNRES_with_ann.csv",  
+                         header=TRUE,  skip=1)
+# Keep only 2015 and rename header.
+#names(pop)
+pop1 <- pop[,c(3,11)]
+names(pop1) <- c("State","pop2015") 
+
+#Dataset with states and abbreviations:
+# http://www.fonz.net/blog/archives/2008/04/06/csv-of-states-and-state-abbreviations/
+states <- read.csv("states.csv")
+#View(states)
+
+# Merge & rename abbreviated state column
+pop.state <- merge(pop1, states, by = "State")
+colnames(pop.state)[colnames(pop.state) == 'Abbreviation'] <- 'contbr_st'
+pop.state$pop.hundthou <- pop.state$pop2015/100000
+#View(pop.state)
+
+# Now I want to see if there are any weird states in our us sample
+states_all <- unique(us_samp.clean$contbr_st)
+us_states <- pop.state$contbr_st
+bad_states <- setdiff(states_all, us_states)
+    # These are not US states, I'm going to remove them from our clean dataset.
+
+us_samp.clean <- subset(us_samp.clean, !(contbr_st %in% bad_states))
+
+# Merge datasets - us clean sample with pop.state
+us_samp.clean <- merge(us_samp.clean, pop.state, by = 'contbr_st')
+
+# Let's clean the primaries dataset up too:
+primaries <- subset(primaries, !(contbr_st %in% bad_states))
+primaries <- merge(primaries, pop.state, by = 'contbr_st')
+
+```
+
+```{r}
+states_count <- ggplot(aes(x = contbr_st), data = us_samp.clean) + 
+    geom_bar() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+#table(us_samp.clean$contbr_st)
+# For primaries?
+primary_states_count <- ggplot(data = primaries, aes(x = contbr_st))+
+    geom_bar()+ 
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+grid.arrange(states_count, primary_states_count)
+```
+
+The top plot shows the count of contributions by state for the full election cycle; the bottom plot shows only the primaries. 
+
+In both plots, states with the highest contributions were California, New York, and Texas. Those are also the states with the highest population, so I will be interested to look at per capita rates of giving for each state. But that's later on when I transform the datasets.
+
+There is not much if any discernible difference in the distribution of contributions among states between the primaries and the overall election cycle, other than the actual count of contributions. Makes sense.
+
+## Occupation 
+```{r}
+length(unique(us_samp.clean$contbr_occupation))
+```
+
+At over 2,000 unique occupations, that's too many to plot! I have enough to look at otherwise.
+
+## Contribution date
+```{r}
+summary( us_samp.clean$contb_receipt_dt)
+# First creating density plots
+contb_dt_density <- ggplot(data = us_samp.clean, aes(x = contb_receipt_dt)) + 
+    geom_density()+
+    scale_x_date(breaks = date_breaks("month")) +
+    theme(axis.text.x = element_text(angle = 90))
+#Reference: http://docs.ggplot2.org/0.9.3.1/scale_date.html
+# Reference: https://discussions.udacity.com/t/financial-contributions-data-gender-political-party-and-location/194785/14
+
+contb_dt_density
+```
+
+This contribution receipt date density plot gives a nice picture of concentration of overall contributions over time. The number of contributions ramps up from March 2015 through mid March 2016, then drops - I think as a number of the primary candidates drop out. There's a smaller peak in contributions around July 2016, just before Bernie Sanders dropped out of the Democratic primary. Then the final peak in November just before the election. This will be interesting to view by party, and/or candidate!
+
+# Univariate Analysis
+
+### What is the structure of your dataset?
+In the full US dataset, there are 7,344,719 contributions. I am interested in looking at the distribution of contributions across all 50 states, but realize the limitations of my computer in working with such a large dataset. So I took a sample of 10,000 contributions, 'us_samp'.
+
+The dataset has 18 variables:
+* 15 factor variables (none are ordered): cmte_id, cand_id, cand_nm, contrb_nm, contbr_city, contbr_st, contbr_zip, contbr_employer, contbr_occupation, receipt_desc, memo_cd, memo_text, form_tp, file_num, tran_id, election_tp.
+* 1 date variable: contb_receipt_dt (this was originally a factor variable but I converted it)
+* 1 integer: file_num
+* 1 number: contb_receipt_amt
+
+Other observations:
+* Hilary Clinton received the most contributions in the full dataset, but Bernie Sanders received the most if looking only at the primary season.
+* The median contribution size is $28.
+* The median contribution date is 2016-05-17.
+* California had the most contributions, followed by New York, then Texas.
+
+### What is/are the main feature(s) of interest in your dataset?
+I am most interested in the variables pertaining to candidate name and contribution receipt amount. I am interested in viewing the number and size of contributions that candidates received.
+
+### What other features in the dataset do you think will help support your investigation into your feature(s) of interest?
+Other factors that contribute to the number and size of contributions to each candidate include:
+* contributor's state
+* contribution receipt date
+* candidate's political party
+
+### Did you create any new variables from existing variables in the dataset?
+I created two variables:
+* party - for the political party of the candidate.
+* population - for the state population in 2015, in order to determine contributions per capita by state. 
+
+### Of the features you investigated, were there any unusual distributions? Did you perform any operations on the data to tidy, adjust, or change the form of the data? If so, why did you do this?
+I log transformed the right skewed contribution amount distributions. The transformed distribution appears more normal, peaking at around $30.
+
+I also used a log 10 transformation on the counts of contributions by political party, since there was a huge difference between Democrats and Republicans, as compared to Green, Independent, and Libertarian parties.
+
+The contribution date was the only other non-categorical variable, but I did not perform a transformation because these are dates, not numerical values, so a log or square transformation, are not appropriate.
+
+
+# Bivariate & Multivariate Plots Section
+I wanted to start with ggpairs to plot every variable against each other. I would have liked to use ggpairs but this analysis is challenging because all but 3 variables are categorical with more than 15 factors, which is the limit for ggpairs. 
+
+I've combined bivariate and multivariate because once I start looking at relationships between variables, it is easy and helpful to add additional variables in to review.
+
+## Donations over time, lines for each party 
+```{r}
+ggplot(data = us_samp.clean, aes(x = contb_receipt_dt, color = party)) + 
+    geom_density()+
+    scale_color_manual(values=c("blue", "green", "purple", " orange", "red"))+
+    scale_x_date(breaks = date_breaks("month")) +
+    theme(axis.text.x = element_text(angle = 90))
+# Manually defined palettes: http://www.cookbook-r.com/Graphs/Colors_(ggplot2)/
+
+```
+
+This density plot is interesting becuase it shows relative density of contributions by each party. The Green party has a much more distinct line because there were far fewer contributions overall than for the Republican and Democratic party, so the density plot is affected by one or two donations in this sample.
+
+Now I want to demonstrate total contributions over time for each party (rather than density of contributions), with lines included for when the second-to-last candidate in the Republican and Democratic primaries dropped out (Cruz and Sanders respectively). Given the small number of contributions for Green, Libertarian, and Independent parties (just 23), let's just use Democrats and Republicans.
+
+```{r}
+us_samp.by_date.party <- us_samp.clean %>% 
+    group_by(contb_receipt_dt, party) %>%
+    summarise(mean_contb = mean(contb_receipt_amt), 
+              median_contb = median(contb_receipt_amt),
+              n = n()) %>%
+    arrange(contb_receipt_dt, party) 
+
+nrow(us_samp.by_date.party[which(us_samp.by_date.party$party == 'Green' |
+                                     us_samp.by_date.party$party == 'Ind' |
+                                     us_samp.by_date.party$party == 'Lib'),])
+
+cruz_drop <- as.Date('2016-05-03')
+
+ggplot(data = us_samp.by_date.party[which(
+    us_samp.by_date.party$party == 'Dem' | 
+        us_samp.by_date.party$party == 'Rep'),], aes(x = contb_receipt_dt, 
+                                                     y = n, color = party))+
+    scale_color_manual(values=c("blue", "red"))+
+    geom_smooth()+
+    scale_x_date(breaks = date_breaks("month")) +
+    theme(axis.text.x = element_text(angle = 90)) +
+    # Sanders out line
+    geom_vline(xintercept= as.numeric(sanders_drop))+
+    geom_text(mapping = aes(x = as.Date('2016-07-12'), y = 0, 
+                            label = 'Sanders out'),
+              size = 4, angle = 90, vjust=-0.4, hjust=0)+
+    # Cruz out line
+    geom_vline(xintercept= as.numeric(cruz_drop))+
+    geom_text(mapping = aes(x = cruz_drop, y = 0, 
+                            label = 'Cruz out'),
+              size = 4, angle = 90, vjust=-0.4, hjust=0)
+
+# References: http://stackoverflow.com/questions/15000257/adding-a-vline-in-ggplot2-using-time,
+# http://docs.ggplot2.org/current/geom_abline.html
+# Adding labels: http://sape.inf.usi.ch/quick-reference/ggplot2/geom_vline
+
+```
+
+I like this plot, showing a 'smoothed' line for the number of contributions received over time by candidates in the Democratic and Republican parties. I added lines to show when the last non-successful primary candidate dropped out - Cruz for Republicans and Sanders for Democrats. 
+
+It is interesting that the 'Cruz out' line crosses more of an inflection point for Democrats than does the 'Sanders' out line. I expected more of an inflection for the party line based on their respective last candidate drop out date. 
+
+Let's look at contributions to each candidate for top 4 candidates.
+
+## Top Candidates contributions over time
+```{r}
+#Subset by candidates
+#unique(us_samp.clean$cand_nm)
+sanders_nm <- 'Sanders, Bernard'
+clinton_nm <- 'Clinton, Hillary Rodham'
+trump_nm <- 'Trump, Donald J.'
+cruz_nm <- "Cruz, Rafael Edward 'Ted'"
+
+finalists <- us_samp.clean[which(us_samp.clean$cand_nm == sanders_nm |
+                                      us_samp.clean$cand_nm == clinton_nm |
+                                      us_samp.clean$cand_nm == trump_nm |
+                                      us_samp.clean$cand_nm == cruz_nm), ]
+
+#freqpoly
+ggplot(data = finalists, aes(x = contb_receipt_dt, color = cand_nm))+
+    geom_freqpoly() +
+    scale_x_date(breaks = date_breaks("2 months"), 
+                 limits = c(as.Date('2015-04-01'),as.Date('2016-11-08'))) +
+    theme(axis.text.x = element_text(angle = 90))
+```
+
+I've switched to a frequency polygon plot to show the actual numbers of contributions by candidate over time, rather than a smoother line with the total number of donations on each date for each candidate, as I did with the party plot above. The frequency polygon is both more accurate and easier to interpret since the smoother line showed negative contribution amounts for some candidates.
+
+This shows an interesting difference in the shape of each candidate's line. The primary candidates peak earlier, with Sanders reaching a much higher peak than anyone else in the primary season, around mid-March. Trump and Clinton both jump to their peaks after the primaries are over, though Clinton keeps soaring as Trump falls again before the election.
+
+
+## Top candidates average donation size over time
+Let's see how average donation size varied over time for these candidates.
+
+```{r}
+# I want to add a line for the last primary candidate dropping out. Using same 'sanders_drop' variable from above.
+#head(finalists)
+finalists.by_date.nm <- finalists %>% 
+    group_by(contb_receipt_dt, cand_nm) %>%
+    summarise(mean_contb = mean(contb_receipt_amt), 
+              median_contb = median(contb_receipt_amt),
+              n = n()) %>%
+    arrange(contb_receipt_dt, cand_nm) 
+#head(finalists.by_date.nm, 10)
+
+mean_contb <- ggplot(data = finalists.by_date.nm, 
+                     aes(x = contb_receipt_dt, y = mean_contb, 
+                         color = cand_nm))+
+    geom_smooth()+ 
+    scale_x_date(breaks = date_breaks("2 months"), 
+                 limits = c(as.Date('2015-04-01'),as.Date('2016-11-08'))) +
+    theme(axis.text.x = element_text(angle = 90))+
+    geom_vline(xintercept= as.numeric(sanders_drop))+
+    geom_text(mapping = aes(x = sanders_drop, y = 0, 
+                            label = 'Last primary candidate out'),
+              size = 4, angle = 90, vjust=-0.1, hjust=-0.25)
+
+median_contb <- ggplot(data = finalists.by_date.nm, 
+                       aes(x = contb_receipt_dt, y = median_contb, 
+                           color = cand_nm))+
+    geom_smooth()+ 
+    scale_x_date(breaks = date_breaks("2 months"), 
+                 limits = c(as.Date('2015-04-01'),as.Date('2016-11-08'))) +
+    theme(axis.text.x = element_text(angle = 90))+
+    geom_vline(xintercept= as.numeric(sanders_drop))+
+    geom_text(mapping = aes(x = sanders_drop, y = 0, 
+                            label = 'Last primary candidate drops out'),
+              size = 4, angle = 90, vjust=-0.1, hjust=-0.5)
+
+#grid.arrange(mean_contb, median_contb) 
+# Mean and median plots looked very similar, let's go with mean.
+
+mean_contb
+```
+
+I like this plot, too. Clinton started off with some giant donations. Really interesting to see Trump's mean contribution amount jump quite significantly once it was officially Clinton v. Trump from the major parties. 
+
+
+## Contributions by state
+I want to look at number and size of contributions by state. 
+```{r}
+#chain functions together
+us_samp.by_state <- us_samp.clean %>% 
+    group_by(contbr_st) %>%
+    summarise(mean_contb = mean(contb_receipt_amt), 
+              median_contb = median(contb_receipt_amt),
+              n = n()) %>%
+    arrange(contbr_st) 
+#View(us_samp.by_state)
+
+# Merge with state population
+us_samp.by_state1 <- merge(us_samp.by_state, pop.state, by = 'contbr_st')
+#View(us_samp.by_state1)
+
+us_samp.by_state1$nperhundthou <- us_samp.by_state1$n/
+    us_samp.by_state1$pop.hundthou
+
+with(us_samp.by_state1, cor(mean_contb, n))
+
+# Let's plot number of contributions by average contribution
+ggplot(aes(x = n, y = mean_contb), data = us_samp.by_state1) +
+    geom_point()+
+    geom_abline()
+
+```
+
+This last plot is somewhat interesting, but not really. There's a weak positive correlation (0.11) between the number of contributions and the average size of donations in states. So very roughly, as more people contribute, the average contribution size goes up. This plot is most clustered around about 100 people giving in a state, at an average of about $120. That's actually fairly high. Remembering that this is a sample, we can't actually look at the number of contributions as meaningful, only the trends.
+
+Let's create a heat map of the US with average contribution sizes in bins by color.
+
+```{r}
+#Source: http://stackoverflow.com/questions/24441775/how-do-you-create-a-us-states-heatmap-based-on-some-values
+states <- map_data("state")
+# create all lowercase state name to merge with map data
+us_samp.by_state1$region <- tolower(us_samp.by_state1$State)
+
+map.df <- merge(states, us_samp.by_state1, by='region', 
+                all.us_samp.by_state1 = T)
+
+# Heat map by count of contributions
+map_num <-ggplot(map.df, aes(x=long,y=lat,group=group))+
+  geom_polygon(aes(fill=n))+
+  geom_path()+ 
+  scale_fill_gradientn(colours=rev(heat.colors(10)),na.value="grey90")+
+  coord_map()
+
+# Heat map by count of contributions per capita
+map_numcap <- ggplot(map.df, aes(x=long,y=lat,group=group))+
+  geom_polygon(aes(fill=nperhundthou))+
+  geom_path()+ 
+  scale_fill_gradientn(colours=rev(heat.colors(10)),na.value="grey90")+
+  coord_map()
+
+#grid.arrange(map_num, map_numcap)
+
+# Bar charts 
+bar_num <- ggplot(data = us_samp.by_state1, aes(x = contbr_st, y = n))+
+    geom_bar(stat = 'identity') + 
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 5))
+
+bar_numcap <- ggplot(data = us_samp.by_state1, aes(x = contbr_st, 
+                                                   y = nperhundthou))+
+    geom_bar(stat = 'identity') + 
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 5))
+
+# Numbers of contributions by state
+grid.arrange(map_num, bar_num, map_numcap, bar_numcap)
+```
+
+Here are heat maps of the US, along with their corresponding bar charts. The size of the bar charts makes them pretty impossible to read state names, but interesting to see a bar chart reflection of the heat map.
+
+The top map and chart are of total contributions per state, again showing hot spots of California, then NY and Texas.
+
+The bottom map and chart show contributions per hundred thousand residents. Vermont and DC 9which is too small to see on the map) are so high, that the other states are all light yellow, less useful of a map. 
+
+Here are maps of mean contributions per state.
+```{r}
+# Bar charts first
+mean_cont <- ggplot(data = us_samp.by_state1, aes(x = contbr_st, 
+                                                  y = mean_contb))+
+    geom_bar(stat = 'identity') + 
+    theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+median_cont <- ggplot(data = us_samp.by_state1, aes(x = contbr_st, 
+                                                    y = median_contb))+
+    geom_bar(stat = 'identity') + 
+    theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+#grid.arrange(mean_cont, median_cont)
+# Median contributions are very similar to mean, so I'm only showing mean.
+
+# Heat map by average contribution
+map_avg <- ggplot(map.df, aes(x=long,y=lat,group=group))+
+  geom_polygon(aes(fill=mean_contb))+
+  geom_path()+ 
+  scale_fill_gradientn(colours=rev(heat.colors(10)),na.value="grey90")+
+  coord_map()
+
+## They're really not that different, so let's go for mean contribution
+map_mean1 <- ggplot(map.df, aes(x=long,y=lat,group=group))+
+    geom_polygon(aes(fill=mean_contb))+
+    geom_path()+ 
+    scale_fill_gradientn(colours=rev(heat.colors(10)),na.value="grey90")+
+    coord_map()+
+    labs(title = 'Average Contribution Size by State', 
+         fill = 'Average Contribution ($)',
+         x = '', y = '') +
+    #Remove axes
+    theme(axis.line=element_blank(),axis.text.x=element_blank(),
+          axis.text.y=element_blank(),axis.ticks=element_blank())
+
+grid.arrange(map_mean1, mean_cont)
+#Show top contributions per capita states
+#View(head(us_samp.by_state1[order(-us_samp.by_state1$mean_contb),
+#                            c('State','mean_contb')], 10))
+
+## ggplot labels reference: http://docs.ggplot2.org/0.9.2.1/labs.html
+## Removing axes reference: http://stackoverflow.com/questions/6528180/ggplot2-plot-without-axes-legends-etc
+```
+
+This is neat to see - it is a more even distribution of mean contribution sizes across states than of number of donations, so the map is more colorful. The highest mean contribution is Arkansas, followed by DC. it would be interesting to show this map divided by party - since I know that Arkansas is very Republican and DC very Democrat, but there's enough to look at in this dataset!
+
+## State by candidate
+```{r fig.width = 20, fig.height = 6}
+
+# Using 'finalists' dataset from above, with top 4 candidates to create dataset primaries only:
+finalists_primaries <- finalists[ which(
+    finalists$contb_receipt_dt <= sanders_drop),]
+#max(finalists_primaries$contb_receipt_dt)
+
+
+ggplot(aes(x = contbr_st, fill = cand_nm), data = finalists_primaries) + 
+    geom_bar(position = 'dodge') +
+    theme(axis.text.x = element_text(angle = 90, size = 15))
+
+```
+
+The democratic candidates appear to be clearly above Republicans in most sates, notably excepting Texas in which Cruz is leading. 
+Sanders appears to be beating Hilary in contributions in almost every state. Let's look at just the two of them.
+
+```{r fig.width = 20, fig.height = 6}
+dem_finalists_primaries <- finalists_primaries[ 
+    which( finalists_primaries$cand_nm == clinton_nm |
+               finalists_primaries$cand_nm == sanders_nm),]
+#max(finalists_primaries$contb_receipt_dt)
+
+ggplot(aes(x = contbr_st, fill = cand_nm), data = dem_finalists_primaries) + 
+    geom_bar(position = 'dodge') +
+    theme(axis.text.x = element_text(angle = 90, size = 15))
+
+```
+Yes, looks like Sanders was ahead in number of contributions in almost every state.
+
+How about just among republicans
+```{r fig.width = 20, fig.height = 6}
+rep_finalists_primaries <- finalists_primaries[
+    which(finalists_primaries$cand_nm == cruz_nm |
+              finalists_primaries$cand_nm == trump_nm),]
+#max(finalists_primaries$contb_receipt_dt)
+
+ggplot(aes(x = contbr_st, fill = cand_nm), data = rep_finalists_primaries) + 
+    scale_fill_manual(values = c("green", "purple"))+
+    geom_bar(position = 'dodge') +
+    theme(axis.text.x = element_text(angle = 90, size = 15))
+
+```
+With just a couple of exceptions - it looks like Cruz had more contributions than Trump in almost every state. 
+
+Let's see this in a slightly different way - through ratios.
+```{r}
+
+# First, create dataset by state and candidate name
+finalists_primaries.by_state_cand <- finalists_primaries %>% 
+    group_by(contbr_st, cand_nm) %>%
+    summarise(mean_contb = mean(contb_receipt_amt), 
+              median_contb = median(contb_receipt_amt),
+              n = n()) %>%
+    arrange(contbr_st, cand_nm)
+
+
+finalists_primaries.by_state_cand.widetidy <- spread(subset(
+    finalists_primaries.by_state_cand, 
+    select = c('contbr_st', 'cand_nm', 'n')), cand_nm, n)
+
+# rename columns
+names(finalists_primaries.by_state_cand.widetidy) <- c('contbr_st',
+                                                       'Clinton', 'Cruz',
+                                                       'Sanders', 'Trump')
+#head(finalists_primaries.by_state_cand.widetidy)
+
+# Chart ratio of Clinton to Sanders givers. 
+clinton_sanders <- ggplot(aes(x = contbr_st, y = Clinton/Sanders), 
+                          data = finalists_primaries.by_state_cand.widetidy) +
+    geom_bar(stat = 'identity') +
+    theme(axis.text.x = element_text(angle = 90)) +
+    geom_hline(yintercept = 1)
+
+#horiztonal line reference: http://docs.ggplot2.org/0.9.3.1/geom_hline.html
+
+clinton_sanders
+```
+
+This plot shows the ratio of number of contributions between Clinton and Sanders. States below horizontal line indicate Sanders had more contributors than Clinton; above 1 Clinton won. So in 2 states they tied (Ohio and South Carolina), in 4 states Clinton had more than Sanders (Alabama, Arkansas, and DC-not actually a state), there were 0 contributions from South Dakota in this sample, and in the remaining 44 states, Sanders beat clinton.
+
+```{r}
+# Chart ratio of Trump to Cruz givers. 
+trump_cruz <- ggplot(aes(x = contbr_st, y = Trump/Cruz), 
+                     data = finalists_primaries.by_state_cand.widetidy) +
+    geom_bar(stat = 'identity') +
+    theme(axis.text.x = element_text(angle = 90)) +
+    geom_hline(yintercept = 1)
+trump_cruz
+
+#grid.arrange(clinton_sanders ,trump_cruz)
+```
+
+This one shows the ratio of number of contributions between Trump and Cruz. States below horizontal line indicate Cruz had more contributors than Trump; above mean Trump had more. Again, Cruz appeared to have more contributions in more states than Trump, though less decisively than Sanders.
+
+
+## Size by candidate by party
+I'm curious to see a box and whisker plot for campaign contribution size by candidate, colored by political party.
+```{r fig.width = 12}
+contb_by_cand1 <- ggplot(data = us_samp.clean,aes(x = cand_nm, 
+                                                  y = contb_receipt_amt, 
+                                                  fill = party))+
+    scale_fill_manual(values=c("blue", "green", "purple", " orange", "red"))+
+    geom_boxplot()+
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# I want to add the number of contributions for each party
+## Reference: http://stackoverflow.com/questions/3483203/create-a-boxplot-in-r-that-labels-a-box-with-the-sample-size-n
+give.n <- function(x){
+   return(c(y = mean(x), label = length(x)))
+}
+
+# Let's cut off some outliers to see it a bit more clearly.
+contb_by_cand <- ggplot(data = us_samp.clean, 
+                        aes(x = cand_nm, y = contb_receipt_amt, 
+                            fill = party))+
+    scale_fill_manual(values=c("blue", "green", "purple", " orange", "red"))+
+    geom_boxplot()+
+    coord_flip(ylim = c(0,2750))+
+    stat_summary(fun.data = give.n, geom = "text")
+
+
+# This isn't all that helpful, I'm just going to show it together with a plot below demonstrating the number of contributions per candidate
+num_cont <- ggplot(data = us_samp.clean, 
+                   aes(x = cand_nm, fill = party))+
+    geom_bar()+
+    scale_fill_manual(values=c("blue", "green", "purple", " orange", "red"))+
+    coord_flip()
+
+grid.arrange(contb_by_cand,
+  num_cont ,
+  ncol=1)
+
+```
+It's a little hard to see, but this set of plots demonstrates that broadly, those with the most contributions also had lower averages. Makes sense. Those who dropped out earlier had higher medians, with much higher variance, because there were fewer giving. 
+
+I cut contribution amounts above 2750 to reduce outliers. But as we can in the distribution of contribution amounts within certain candidates, there remain a lot of outliers, like for Clinton.
+
+I want to do it for just Sanders, Clinton, Trump, and Cruz during the primaries.
+```{r fig.width = 10}
+# Using 'finalists' dataset for 4 finalists, thru general election. 
+finalists_primaries <- finalists[which(finalists$contb_receipt_dt <= 
+                                           as.Date(sanders_drop)),]
+
+#max(finalists_primaries$contb_receipt_dt)
+
+contb_by_cand <- ggplot(data = finalists_primaries, aes(x = cand_nm, 
+                                              y = contb_receipt_amt, 
+                                              fill = party))+
+    scale_fill_manual(values=c("blue", "red"))+
+    geom_boxplot()+
+    coord_flip(ylim = c(0,120))
+
+num_cont <- ggplot(data = finalists_primaries, 
+                   aes(x = cand_nm, fill = party))+
+    geom_bar()+
+    scale_fill_manual(values=c("blue", "red"))+
+    coord_flip()
+
+# Remove legend: http://stackoverflow.com/questions/35618260/removing-legend-ggplot-2-2
+grid.arrange(contb_by_cand + theme(legend.position="none"),
+  num_cont +
+  theme(axis.title.y=element_blank(),
+        axis.text.y=element_blank()),
+  ncol=2)
+
+```
+The two democratic candidates, Clinton and Sanders are very close with median contributions of $25 and $27 respectively; with higher median contributions for republican candidates at $40 for Trump and $50 for Cruz.
+
+As shown in the plot to the right, in both parties, the candidates with the most contributions did not win the primary.
+
+Let's check the mean and median contributions of each candidate in table form:
+
+```{r}
+
+finalists_primaries.by_cand <- finalists_primaries %>% 
+    group_by(cand_nm) %>%
+    summarise(mean_contb = mean(contb_receipt_amt), 
+              median_contb = median(contb_receipt_amt),
+              n = n()) %>%
+    arrange(cand_nm) 
+
+finalists_primaries.by_cand
+
+```
+As shown, the mean contribution varied more substantially - with Clinton at the high point of over $176; Sanders at low of $50, and Trump and Cruz int he middle at $120 and $114 respectively. Clearly there are outliers for all candidates which drag the means higher than the medians.
+
+
+# Multivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the investigation. Were there features that strengthened each other in terms of looking at your feature(s) of interest?
+I looked at the number and size of contributions to each candidate over time, by party, and by state. 
+
+I ended up focusing charts on the top 4 candidates, because the other candidates often did not have enough data to draw meaningful observations from the sample.
+
+I enjoyed making map visualiziations of the data, but this was not as useful to look at my primary interest of viewing the difference in contribution amount and size between candidates.
+
+
+### Were there any interesting or surprising interactions between features?
+I was somewhat surprised by the very distinct paths of contribution size to each candidate over time. As Clinton's support went from large contributions to many small; Trump's went from few small size then made a jump to larger contributions once the primaries were over.
+
+It was also interesting to view in boxplot form how Democrats rely on numerous smaller donations, and Republicans get more big dollar donors. While the mean contribution size was not that distinct, it was different, and the number of contributions for the top two democratic candidates far exceeded the number of contributions for the top two republican candidates.
+
+Finally, the state-wise analysis demonstrated how prevalent it was by state for the candidate in each party who did not win the primary to receive more contributions. We already saw that these candidates (Sanders and Cruz) got more overall candidates, the bar plots by state demonstrating the ratio of votes showed that this was the case in most states for both parties (43 for democrats, 35 for Republicans).
+
+------
+
+# Final Plots and Summary
+
+### Plot One
+```{r echo=FALSE, Plot_One}
+ggplot(data = finalists, aes(x = contb_receipt_dt, color = cand_nm))+
+    geom_freqpoly() +
+    scale_x_date(breaks = date_breaks("2 months"), 
+                 limits = c(as.Date('2015-04-01'),as.Date('2016-11-08'))) +
+    theme(axis.text.x = element_text(angle = 90))+
+    labs(title = "Number of Contributions to Top Candidates over Time", 
+         color = 'Candidate')+
+    xlab("Contribution date") +
+    ylab("Number of contributions")+
+    # Sanders out line
+    geom_vline(xintercept= as.numeric(sanders_drop))+
+    geom_text(mapping = aes(x = as.Date('2016-07-12'), y = 0, 
+                            label = 'Sanders out', color = cand_nm),
+              size = 4, angle = 90, vjust=-0.4, hjust=-2)+
+    # Cruz out line
+    geom_vline(xintercept= as.numeric(cruz_drop))+
+    geom_text(mapping = aes(x = cruz_drop, y = 0, label = 'Cruz out', 
+                            color = cand_nm),
+              size = 4, angle = 90, vjust=-0.4, hjust=-2.5)
+
+```    
+
+### Description One
+The number of contributions over time has a unique shape for each of the top 4 candidates, Clinton (D), Sanders (D), Trump (R), and Cruz (R). Both candidates that dropped out after the primaries (Sanders and Cruz) had their peak number of contributions around April to May 2016, just before the primaries. Both Sanders and Cruz appear to have received some contributions after their drop out dates. Sanders dropped out far after the date of his peak contributions, while Cruz dropped out pretty close to his peak.
+
+The candidates that continued (Clinton and Trump) had a peak to date in mid-July, around the time of both parties' national conventions. After this point, the number of contributions to Trump, the candidate who ultimately won, fell quite dramatically, while the number of contributions to Clinton initially fell, then peaked, at over two times the amount of the peak in July. 
+
+Note that the actual number of contributions demonstrated in this chart reflects a sample of total overall contributions.
+
+### Plot Two
+```{r echo=FALSE, Plot_Two}
+ggplot(data = finalists.by_date.nm, aes(x = contb_receipt_dt, 
+                                        y = mean_contb, color = cand_nm))+
+    geom_smooth()+ 
+    scale_x_date(breaks = date_breaks("2 months"), 
+                 limits = c(as.Date('2015-04-01'),as.Date('2016-11-08'))) +
+    theme(axis.text.x = element_text(angle = 90))+
+    # Sanders out line
+    geom_vline(xintercept= as.numeric(sanders_drop))+
+    geom_text(mapping = aes(x = sanders_drop, y = 0, label = 'Sanders out'),
+              size = 3.5, angle = 90, vjust=-0.4, hjust=-2)+
+    # Cruz out line
+    geom_vline(xintercept= as.numeric(cruz_drop))+
+    geom_text(mapping = aes(x = cruz_drop, y = 0, label = 'Cruz out', 
+                            color = cand_nm),
+              size = 4, angle = 90, vjust=-0.4, hjust=-2.5)+
+    
+    labs(title = "Average Size of Contributions to Top Candidates over Time", 
+         color = 'Candidate')+
+    xlab("Contribution date") +
+    ylab("Average size of contributions ($)")
+```
+
+### Description Two
+The average contribution size over time followed a similar pattern for Clinton, Sanders, and Cruz; with higher average amounts at the start of the race. This was much more pronouned for Clinton, whose initial average contribution size was over $1200, compared to Sanders whose initial average contribution size was around $250. While Cruz had a jump around October2015, these three candidates generally had their average donation size fall througout the course  of the campaign. 
+
+Trump, on the other hand, a notably unconventional candidate, started receiving contributions late, with his average contribution size at about the lowest it was throughout the race. His average size increased dramatically when the race dropped to just Trump and clinton.
+
+### Plot Three
+```{r echo=FALSE, Plot_Three, fig.width = 15}
+
+dems1 <- ggplot(aes(x = contbr_st, fill = cand_nm), 
+                data = dem_finalists_primaries) + 
+    geom_bar(position = 'dodge') +
+    theme(axis.text.x = element_text(angle = 90, size = 15))+
+    labs(title="Number of Contributions to Top Democratic Candidates by State", 
+         color = 'Candidate')+
+    xlab("State") +
+    ylab("Number of contributions")
+
+reps1 <- ggplot(aes(x = contbr_st, fill = cand_nm), 
+                data = rep_finalists_primaries) + 
+    scale_fill_manual(values = c("green", "purple"))+
+    geom_bar(position = 'dodge') +
+    theme(axis.text.x = element_text(angle = 90, size = 15))+
+    labs(title="Number of Contributions to Top Republican Candidates by State", 
+         color = 'Candidate')+
+    xlab("State") +
+    ylab("Number of contributions")
+
+#grid.arrange(dems1, reps1)
+
+#With log 10 transformations
+dems <- ggplot(aes(x = contbr_st, fill = cand_nm), 
+               data = dem_finalists_primaries) + 
+    geom_bar(position = 'dodge') +
+    theme(axis.text.x = element_text(angle = 90, size = 15))+
+    labs(title="Number of Contributions to Top Democratic Candidates by State", 
+         color = 'Candidate')+
+    scale_y_log10()
+
+reps <- ggplot(aes(x = contbr_st, fill = cand_nm), 
+               data = rep_finalists_primaries) + 
+    scale_fill_manual(values = c("green", "purple"))+
+    geom_bar(position = 'dodge') +
+    labs(title="Number of Contributions to Top Republican Candidates by State", 
+         color = 'Candidate')+
+    theme(axis.text.x = element_text(angle = 90, size = 15)) +
+    scale_y_log10()
+
+grid.arrange(dems, reps)
+
+
+```
+
+### Description Three
+These charts compare the number of contributions to each candidate by state, with the top chart showing Clinton and Sanders; the bottom chart showing Trump and Cruz. As demonstrated, in most states for both party, the candidate who ultimately dropped out of the race received more contributions. 
+
+The y axis with count of contributions has the application of a log10 transformation to more clearly show the difference between candidates for all states. 
+
+------
+
+# Reflection
+## Where did I run into difficulties in the analysis?
+In general, I ran into difficulties assessing the best methods to assess the data, and what subsets to use to do so. I was very interested in looking at a sample of the entire country, rather than simply one state. This required a sample, which cauesd some limitations in my analysis. For example, there were only a handful of contributions to candidates from parties that weren't Democratic or Republican, which made it difficult to draw conculsions on average sample size or trends in dates of contributions.
+
+So I decided to subset the data to the four top candidates. I also decided that I should further subset the data in some cases to the primaries, so that I could draw a relatively more even comparison between the number of contributions for candidates, since using the full dataset favored the candidates who went on to the general election and continued collecting contributions.
+
+Ensuring throughout that my subsetting was working appropriately was surprisingly challenging, but instilled some better practices in naming data subsets.
+
+##Where did I find successes?
+I found sucess in assessing how contributions--numbers as well as mean/median size-- changed over time using the date. After converting the contriubtion receipt date to a date object, this was a very valuable variable in assesing trends over time. I think the most fascinating aspect was how different Trump's contribution distribution over time varied from the other top candidates, as demonstrated in plots 1 and 2 above in the final plots section.
+
+##How could the analysis be enriched in future work (e.g. additional data and analyses)?
+I think it would be fascinating to see over different election cycles how these trends play out. Most in the US see Trump as an extremely unusual candidate, who won in spite of incredible odds against him (according to most analysts). In this election, the andidates from both major parties that went on to the general election had far fewer contributions than their runner-ups, a trend that was present in the majority of states. I would be curious how common this is.
+
+I am also curious over time if Republicans have always had higher contribution sizes and fewer contributions than democrats. If that has been present for recent history and if the difference is increasing or decreasing.
